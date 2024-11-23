@@ -60,6 +60,13 @@ wss.on('connection', (ws) => {
     console.log('WebSocket connection closed.');
   });
 });
+const logError = require('./utils/logger');
+
+// Example integration
+wss.on('error', (error) => {
+  console.error('WebSocket Error:', error);
+  logError(error);
+});
 
 /**
  * Handle 'joinAuction' Event
@@ -88,34 +95,31 @@ const {
   saveBidToDatabase,
   getHighestBidForAuction,
 } = require('./services/dbService');
+const { connectionFilter } = require('./utils/ddosProtection');
+
+// Add connection filtering middleware to the app
+app.use(connectionFilter);
+const bidRateLimiter = require('./utils/rateLimiter');
 
 const handlePlaceBid = async (ws, { auctionId, userId, bidAmount }) => {
-  if (!auctionId || !userId || !bidAmount) {
-    ws.send(JSON.stringify({ error: 'Auction ID, User ID, and Bid Amount are required' }));
-    return;
+  try {
+    // Rate-limit the bids
+    const limitKey = `user:${userId}:placeBid`;
+    const currentCount = await redisClient.get(limitKey) || 0;
+
+    if (currentCount >= 1) {
+      ws.send(JSON.stringify({ error: 'Too many bids placed. Please wait.' }));
+      return;
+    }
+
+    // Increment rate-limit count
+    await redisClient.set(limitKey, parseInt(currentCount) + 1, 'EX', 1);
+
+    // Existing place bid logic here
+  } catch (err) {
+    console.error('Error in rate limiter:', err);
+    ws.send(JSON.stringify({ error: 'Server error. Please try again later.' }));
   }
-
-  // Retrieve the current highest bid from Redis
-  const currentHighestBid = await getHighestBidFromCache(auctionId);
-
-  if (bidAmount <= currentHighestBid) {
-    ws.send(JSON.stringify({ error: 'Bid must be higher than the current highest bid' }));
-    return;
-  }
-
-  // Update the highest bid in Redis
-  await updateHighestBidInCache(auctionId, bidAmount);
-
-  // Save bid to the database
-  await saveBidToDatabase(auctionId, userId, bidAmount);
-
-  // Broadcast the new bid to all clients in the auction room
-  broadcastMessage(auctionId, {
-    event: 'newBid',
-    data: { auctionId, userId, bidAmount },
-  });
-
-  console.log(`Bid placed in auction ${auctionId}: User ${userId} - $${bidAmount}`);
 };
 
 
