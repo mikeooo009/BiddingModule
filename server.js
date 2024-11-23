@@ -84,11 +84,30 @@ const handleJoinAuction = (ws, { auctionId }) => {
 /**
  * Handle 'placeBid' Event
  */
-const handlePlaceBid = (ws, { auctionId, userId, bidAmount }) => {
+const {
+  saveBidToDatabase,
+  getHighestBidForAuction,
+} = require('./services/dbService');
+
+const handlePlaceBid = async (ws, { auctionId, userId, bidAmount }) => {
   if (!auctionId || !userId || !bidAmount) {
     ws.send(JSON.stringify({ error: 'Auction ID, User ID, and Bid Amount are required' }));
     return;
   }
+
+  // Retrieve the current highest bid from Redis
+  const currentHighestBid = await getHighestBidFromCache(auctionId);
+
+  if (bidAmount <= currentHighestBid) {
+    ws.send(JSON.stringify({ error: 'Bid must be higher than the current highest bid' }));
+    return;
+  }
+
+  // Update the highest bid in Redis
+  await updateHighestBidInCache(auctionId, bidAmount);
+
+  // Save bid to the database
+  await saveBidToDatabase(auctionId, userId, bidAmount);
 
   // Broadcast the new bid to all clients in the auction room
   broadcastMessage(auctionId, {
@@ -98,6 +117,7 @@ const handlePlaceBid = (ws, { auctionId, userId, bidAmount }) => {
 
   console.log(`Bid placed in auction ${auctionId}: User ${userId} - $${bidAmount}`);
 };
+
 
 /**
  * Handle 'auctionEnd' Event
@@ -124,3 +144,16 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+
+const {
+  saveBidToDatabase,
+  getHighestBidForAuction,
+} = require('./services/dbService');
+ 
+
+const {
+  updateHighestBidInCache,
+  getHighestBidFromCache,
+} = require('./services/redisService');
+ 
